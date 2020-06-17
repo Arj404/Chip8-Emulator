@@ -36,7 +36,7 @@ private:
     uint8_t delayTimer;
     uint8_t soundTimer;
     uint16_t stack[16];
-    uint16_t i;
+    uint16_t I;
     uint16_t pc;
     uint16_t opcode;
     uint16_t sp;
@@ -110,7 +110,7 @@ void chip8::reset()
 {
     this->pc = 0x200;
     this->opcode = 0;
-    this->i = 0;
+    this->I = 0;
     this->sp = 0;
     this->delayTimer = 0;
     this->soundTimer = 0;
@@ -131,7 +131,7 @@ void chip8::reset()
     for (int i = 0; i < 80; ++i)
         memory[i] = fontset[i];
 
-    // srand(time(NULL));
+    srand(time(NULL));
 }
 
 void chip8::executeOpcode()
@@ -142,55 +142,124 @@ void chip8::executeOpcode()
         switch (opcode & 0x000F)
         {
         case 0x0000: // 00E0 - CLS
+            for (int i = 0; i < 2048; ++i)
+                gfx[i] = 0x0;
+            drawFlag = true;
             break;
         case 0x000E: // 00EE - RET
+            --sp;
+            pc = stack[sp];
             break;
+        default:
+            printf("Unknown opcode [0xE000]: 0x%X\n", opcode);
         }
         break;
     case 0x1000: // 1nnn - JP addr
+        pc = ArgNNN(opcode);
         break;
     case 0x2000: // 2nnn - CALL addr
+        stack[sp] = pc;
+        ++sp;
+        pc = ArgNNN(opcode);
         break;
     case 0x3000: // 3xkk - SE Vx, byte
+        if (v[ArgX(opcode)] == ArgNN(opcode))
+        {
+            pc += 2;
+        }
         break;
     case 0x4000: // 4xkk - SNE Vx, byte
+        if (v[ArgX(opcode)] != ArgNN(opcode))
+        {
+            pc += 2;
+        }
         break;
     case 0x5000: // 5xy0 - SE Vx, Vy
+        if (v[ArgX(opcode)] == v[ArgY(opcode)])
+        {
+            pc += 2;
+        }
         break;
     case 0x6000: // 6xkk - LD Vx, byte
+        v[ArgX(opcode)] = ArgNN(opcode);
         break;
     case 0x7000: // 7xkk - ADD Vx, byte
+        v[ArgX(opcode)] += ArgNN(opcode);
         break;
     case 0x8000:
         switch (opcode & 0x000F)
         {
         case 0x0000: // 8xy0 - LD Vx, Vy
+            v[ArgX(opcode)] = v[ArgY(opcode)];
             break;
         case 0x0001: // 8xy1 - OR Vx, Vy
+            v[ArgX(opcode)] |= v[ArgY(opcode)];
             break;
         case 0x0002: // 8xy2 - AND Vx, Vy
+            v[ArgX(opcode)] &= v[ArgY(opcode)];
             break;
         case 0x0003: // 8xy3 - XOR Vx, Vy
+            v[ArgX(opcode)] ^= v[ArgY(opcode)];
             break;
         case 0x0004: // 8xy4 - ADD Vx, Vy
+            if (v[ArgY(opcode)] > (0xFF - v[ArgX(opcode)]))
+            {
+                v[0xF] = 1;
+            }
+            else
+            {
+                v[0xF] = 0;
+            }
+            v[ArgX(opcode)] += v[ArgY(opcode)];
             break;
         case 0x0005: // 8xy5 - SUB Vx, Vy
+            if (v[ArgX(opcode)] > v[ArgY(opcode)])
+            {
+                v[0xF] = 1;
+            }
+            else
+            {
+                v[0xF] = 0;
+            }
+            v[ArgX(opcode)] -= v[ArgY(opcode)];
             break;
         case 0x0006: // 8xy6 - SHR Vx {, Vy}
+            v[0xF] = v[ArgX(opcode)] & 0x1;
+            v[ArgX(opcode)] >>= 1;
             break;
         case 0x0007: // 8xy7 - SUBN Vx, Vy
+            if (v[ArgX(opcode)] > v[ArgY(opcode)])
+            {
+                v[0xF] = 0;
+            }
+            else
+            {
+                v[0xF] = 1;
+            }
+            v[ArgX(opcode)] = v[ArgY(opcode)] - v[ArgX(opcode)];
             break;
         case 0x000E: // 8xyE - SHL Vx {, Vy}
+            v[0xF] = v[ArgX(opcode)] >> 7;
+            v[ArgX(opcode)] <<= 1;
             break;
+        default:
+            printf("Unknown opcode [0xE000]: 0x%X\n", opcode);
         }
         break;
     case 0x9000: // 9xy0 - SNE Vx, Vy
+        if (v[ArgX(opcode)] != v[ArgY(opcode)])
+        {
+            pc += 2;
+        }
         break;
     case 0xA000: // Annn - LD I, addr
+        I = ArgNNN(opcode);
         break;
     case 0xB000: // Bnnn - JP V0, addr
+        pc = (ArgNNN(opcode) + v[0]) & 0x0FFF;
         break;
     case 0xC000: // Cxkk - RND Vx, byte
+        v[ArgX(opcode)] = (rand() % 0xFF) & ArgNN(opcode);
         break;
     case 0xD000: // Dxyn - DRW Vx, Vy, nibble
         break;
@@ -198,32 +267,57 @@ void chip8::executeOpcode()
         switch (opcode & 0x00FF)
         {
         case 0x009E: // Ex9E - SKP Vx
+            if (key[v[ArgX(opcode)]] != 0)
+                pc += 2;
             break;
         case 0x00A1: // ExA1 - SKNP Vx
+            if (key[v[ArgX(opcode)]] == 0)
+                pc += 2;
             break;
+        default:
+            printf("Unknown opcode [0xE000]: 0x%X\n", opcode);
         }
         break;
     case 0xF000:
         switch (opcode & 0x00FF)
         {
         case 0x0007: // Fx07 - LD Vx, DT
+            v[ArgX(opcode)] = delayTimer;
             break;
         case 0x000A: // Fx0A - LD Vx, K
             break;
         case 0x0015: // Fx15 - LD DT, Vx
+            delayTimer = v[ArgX(opcode)];
             break;
         case 0x0018: // Fx18 - LD ST, Vx
+            soundTimer = v[ArgX(opcode)];
             break;
         case 0x001E: // Fx1E - ADD I, Vx
+            if (I + v[ArgX(opcode)] > 0x0FFF)
+                v[0xF] = 1;
+            else
+                v[0xF] = 0;
+            I = (I + v[ArgX(opcode)]) & 0x0FFF;
             break;
         case 0x0029: // Fx29 - LD F, Vx
             break;
         case 0x0033: // Fx33 - LD B, Vx
+            memory[I + 0] = v[ArgX(opcode)] / 100;
+            memory[I + 1] = (v[ArgX(opcode)] / 10) % 10;
+            memory[I + 2] = (v[ArgX(opcode)] % 100) % 10;
             break;
         case 0x0055: // Fx55 - LD [I], Vx
+            for (int i = 0; i <= ArgX(opcode); ++i)
+                memory[I + i] = v[i];
+            I += ArgX(opcode) + 1;
             break;
         case 0x0065: // Fx65 - LD Vx, [I]
+            for (int i = 0; i <= ArgX(opcode); ++i)
+                v[i] = memory[I + i];
+            I += ArgX(opcode) + 1;
             break;
+        default:
+            printf("Unknown opcode [0xE000]: 0x%X\n", opcode);
         }
         break;
     default:
