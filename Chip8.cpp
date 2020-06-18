@@ -22,13 +22,14 @@ class chip8
 public:
     chip8();
     ~chip8();
-    uint8_t gfx[64 * 32];
+    uint8_t frameBuffer[64 * 32];
     uint8_t key[16];
     bool drawFlag;
     SDL_atomic_t the_end;
     bool loadRom(const char *fname);
     void reset();
     void MainLoop();
+    void SetScreen(uint8_t *buf, uint32_t w, uint32_t h);
 
 private:
     uint8_t memory[4096];
@@ -38,15 +39,17 @@ private:
     uint16_t stack[16];
     uint16_t I;
     uint16_t pc;
-    uint16_t opcode;
     uint16_t sp;
+    uint8_t *screen;
+    uint32_t screen_w, screen_h;
     static unsigned char fontset[80];
-    void executeOpcode();
+    void executeOpcode(uint16_t opcode);
     uint16_t ArgNNN(uint16_t opcode) const;
     uint16_t ArgNN(uint16_t opcode) const;
     uint16_t ArgN(uint16_t opcode) const;
     uint16_t ArgX(uint16_t opcode) const;
     uint16_t ArgY(uint16_t opcode) const;
+    void redrawScreen();
 };
 
 unsigned char chip8::fontset[80] = {
@@ -109,15 +112,17 @@ bool chip8::loadRom(const char *fname)
 void chip8::reset()
 {
     this->pc = 0x200;
-    this->opcode = 0;
     this->I = 0;
     this->sp = 0;
     this->delayTimer = 0;
     this->soundTimer = 0;
     this->drawFlag = true;
+    this->screen = nullptr;
+    this->screen_w = 0;
+    this->screen_h = 0;
 
     for (int i = 0; i < 2048; ++i)
-        gfx[i] = 0;
+        frameBuffer[i] = 0;
 
     for (int i = 0; i < 16; ++i)
     {
@@ -134,7 +139,7 @@ void chip8::reset()
     srand(time(NULL));
 }
 
-void chip8::executeOpcode()
+void chip8::executeOpcode(uint16_t opcode)
 {
     switch (opcode & 0xF000)
     {
@@ -143,8 +148,9 @@ void chip8::executeOpcode()
         {
         case 0x0000: // 00E0 - CLS
             for (int i = 0; i < 2048; ++i)
-                gfx[i] = 0x0;
+                frameBuffer[i] = 0x0;
             drawFlag = true;
+            redrawScreen();
             break;
         case 0x000E: // 00EE - RET
             --sp;
@@ -261,7 +267,21 @@ void chip8::executeOpcode()
     case 0xC000: // Cxkk - RND Vx, byte
         v[ArgX(opcode)] = (rand() % 0xFF) & ArgNN(opcode);
         break;
-    case 0xD000: // Dxyn - DRW Vx, Vy, nibble
+    case 0xD000:                          // Dxyn - DRW Vx, Vy, nibble
+         // NOTE : wrap around in v[ArgY(opcode)] % 32 and v[ArgX(opcode)] % 64??
+        for (int j = 0; j < ArgN(opcode); j++)
+        {
+            uint8_t px = memory[I + j];
+            for (int k = 0; k < 8; k++)
+            {
+                if (((px >> k) & 1) && (frameBuffer[(v[ArgX(opcode)] % 64) + k + ((v[ArgY(opcode)] % 32) + j) * 64]))
+                {
+                    v[0xF] = 1;
+                }
+                frameBuffer[(v[ArgX(opcode)] % 64) + k + ((v[ArgY(opcode)] % 32) + j) * 64] ^= (px >> k) & 1;
+            }
+        }
+        redrawScreen();
         break;
     case 0xE000:
         switch (opcode & 0x00FF)
@@ -285,6 +305,7 @@ void chip8::executeOpcode()
             v[ArgX(opcode)] = delayTimer;
             break;
         case 0x000A: // Fx0A - LD Vx, K
+            // TODO
             break;
         case 0x0015: // Fx15 - LD DT, Vx
             delayTimer = v[ArgX(opcode)];
@@ -300,6 +321,8 @@ void chip8::executeOpcode()
             I = (I + v[ArgX(opcode)]) & 0x0FFF;
             break;
         case 0x0029: // Fx29 - LD F, Vx
+            // TODO
+            I = v[ArgX(opcode)] * 0x5;
             break;
         case 0x0033: // Fx33 - LD B, Vx
             memory[I + 0] = v[ArgX(opcode)] / 100;
@@ -348,6 +371,38 @@ uint16_t chip8::ArgX(uint16_t opcode) const
 uint16_t chip8::ArgY(uint16_t opcode) const
 {
     return (opcode & 0x00F0) >> 4;
+}
+
+void chip8::redrawScreen()
+{
+    // TODO
+    if (screen == nullptr)
+    {
+        return;
+    }
+    for (int y = 0; y < 32; y++)
+    {
+        for (int x = 0; x < 64; x++)
+        {
+            for (int k = y * PIXEL_SIZE; k < (y + 1) * PIXEL_SIZE; k++)
+            {
+                for (int j = x * PIXEL_SIZE; j < (x + 1) * PIXEL_SIZE; j++)
+                {
+                    screen[(k * screen_w + j) * 4 + 0] = frameBuffer[x + y * 64];
+                    screen[(k * screen_w + j) * 4 + 1] = frameBuffer[x + y * 64];
+                    screen[(k * screen_w + j) * 4 + 2] = frameBuffer[x + y * 64];
+                    screen[(k * screen_w + j) * 4 + 3] = frameBuffer[x + y * 64];
+                }
+            }
+        }
+    }
+}
+
+void chip8::SetScreen(uint8_t *buf, uint32_t w, uint32_t h)
+{
+    screen = buf;
+    screen_h = h;
+    screen_w = w;
 }
 
 void chip8::MainLoop()
@@ -406,8 +461,10 @@ int main(int argc, char **argv)
     // }
     SDL_Surface *surface = SDL_GetWindowSurface(win);
     SDL_Thread *th = SDL_CreateThread(VMThread, "vm thread", vm.get());
-    uint8_t *px = (uint8_t *)surface->pixels;
-    px[256 * surface->pitch + 512 * 4] = 0xff;
+    vm->SetScreen((uint8_t *)surface->pixels, surface->w, surface->h);
+
+    // uint8_t *px = (uint8_t *)surface->pixels;
+    // px[256 * surface->pitch + 512 * 4] = 0xff;
 
     SDL_Event e;
     bool the_end = false;
