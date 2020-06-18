@@ -13,7 +13,6 @@
 #include <iostream>
 #include <SDL2/SDL.h>
 #undef main
-//#include <stdint.h>
 #include <memory>
 const int PIXEL_SIZE = 16;
 
@@ -23,13 +22,14 @@ public:
     chip8();
     ~chip8();
     uint8_t frameBuffer[64 * 32];
-    uint8_t key[16];
-    bool drawFlag;
+    bool key[16];
+    int last_key;
     SDL_atomic_t the_end;
     bool loadRom(const char *fname);
     void reset();
     void MainLoop();
     void SetScreen(uint8_t *buf, uint32_t w, uint32_t h);
+    void executeOpcode(uint16_t opcode);
 
 private:
     uint8_t memory[4096];
@@ -43,7 +43,6 @@ private:
     uint8_t *screen;
     uint32_t screen_w, screen_h;
     static unsigned char fontset[80];
-    void executeOpcode(uint16_t opcode);
     uint16_t ArgNNN(uint16_t opcode) const;
     uint16_t ArgNN(uint16_t opcode) const;
     uint16_t ArgN(uint16_t opcode) const;
@@ -111,23 +110,24 @@ bool chip8::loadRom(const char *fname)
 
 void chip8::reset()
 {
-    this->pc = 0x200;
+    pc = 0x200;
     this->I = 0;
-    this->sp = 0;
-    this->delayTimer = 0;
-    this->soundTimer = 0;
-    this->drawFlag = true;
-    this->screen = nullptr;
-    this->screen_w = 0;
-    this->screen_h = 0;
+    sp = 0;
+    delayTimer = 0;
+    soundTimer = 0;
+    screen = nullptr;
+    screen_w = 0;
+    screen_h = 0;
+    last_key = -1;
 
     for (int i = 0; i < 2048; ++i)
-        frameBuffer[i] = 0;
+        frameBuffer[i] = 0x0;
 
     for (int i = 0; i < 16; ++i)
     {
         stack[i] = 0;
-        key[i] = v[i] = 0;
+        key[i] = false;
+        v[i] = 0;
     }
 
     for (int i = 0; i < 4096; ++i)
@@ -149,7 +149,6 @@ void chip8::executeOpcode(uint16_t opcode)
         case 0x0000: // 00E0 - CLS
             for (int i = 0; i < 2048; ++i)
                 frameBuffer[i] = 0x0;
-            drawFlag = true;
             redrawScreen();
             break;
         case 0x000E: // 00EE - RET
@@ -267,18 +266,18 @@ void chip8::executeOpcode(uint16_t opcode)
     case 0xC000: // Cxkk - RND Vx, byte
         v[ArgX(opcode)] = (rand() % 0xFF) & ArgNN(opcode);
         break;
-    case 0xD000:                          // Dxyn - DRW Vx, Vy, nibble
-         // NOTE : wrap around in v[ArgY(opcode)] % 32 and v[ArgX(opcode)] % 64??
+    case 0xD000: // Dxyn - DRW Vx, Vy, nibble
+                 // NOTE : wrap around in v[ArgY(opcode)] % 32 and v[ArgX(opcode)] % 64??
         for (int j = 0; j < ArgN(opcode); j++)
         {
             uint8_t px = memory[I + j];
             for (int k = 0; k < 8; k++)
             {
-                if (((px >> k) & 1) && (frameBuffer[(v[ArgX(opcode)] % 64) + k + ((v[ArgY(opcode)] % 32) + j) * 64]))
+                if (((px >> (7-k)) & 1) && (frameBuffer[(v[ArgX(opcode)] % 64) + k + ((v[ArgY(opcode)] % 32) + j) * 64]))
                 {
                     v[0xF] = 1;
                 }
-                frameBuffer[(v[ArgX(opcode)] % 64) + k + ((v[ArgY(opcode)] % 32) + j) * 64] ^= (px >> k) & 1;
+                frameBuffer[(v[ArgX(opcode)] % 64) + k + ((v[ArgY(opcode)] % 32) + j) * 64] ^= (px >> (7-k)) & 1;
             }
         }
         redrawScreen();
@@ -291,7 +290,7 @@ void chip8::executeOpcode(uint16_t opcode)
                 pc += 2;
             break;
         case 0x00A1: // ExA1 - SKNP Vx
-            if (key[v[ArgX(opcode)]] == 0)
+            if (!key[v[ArgX(opcode)]])
                 pc += 2;
             break;
         default:
@@ -305,7 +304,12 @@ void chip8::executeOpcode(uint16_t opcode)
             v[ArgX(opcode)] = delayTimer;
             break;
         case 0x000A: // Fx0A - LD Vx, K
-            // TODO
+            // NOTE check
+            while (last_key == -1)
+            {
+                SDL_Delay(5);
+            }
+            v[ArgX(opcode)] = last_key;
             break;
         case 0x0015: // Fx15 - LD DT, Vx
             delayTimer = v[ArgX(opcode)];
@@ -321,7 +325,7 @@ void chip8::executeOpcode(uint16_t opcode)
             I = (I + v[ArgX(opcode)]) & 0x0FFF;
             break;
         case 0x0029: // Fx29 - LD F, Vx
-            // TODO
+            // NOTE check
             I = v[ArgX(opcode)] * 0x5;
             break;
         case 0x0033: // Fx33 - LD B, Vx
@@ -375,7 +379,6 @@ uint16_t chip8::ArgY(uint16_t opcode) const
 
 void chip8::redrawScreen()
 {
-    // TODO
     if (screen == nullptr)
     {
         return;
@@ -388,10 +391,10 @@ void chip8::redrawScreen()
             {
                 for (int j = x * PIXEL_SIZE; j < (x + 1) * PIXEL_SIZE; j++)
                 {
-                    screen[(k * screen_w + j) * 4 + 0] = frameBuffer[x + y * 64];
-                    screen[(k * screen_w + j) * 4 + 1] = frameBuffer[x + y * 64];
-                    screen[(k * screen_w + j) * 4 + 2] = frameBuffer[x + y * 64];
-                    screen[(k * screen_w + j) * 4 + 3] = frameBuffer[x + y * 64];
+                    screen[(k * screen_w + j) * 4 + 0] = frameBuffer[x + y * 64] * 0xFF; // blue
+                    screen[(k * screen_w + j) * 4 + 1] = frameBuffer[x + y * 64] * 0xFF; // green
+                    screen[(k * screen_w + j) * 4 + 2] = frameBuffer[x + y * 64] * 0xFF; // red
+                    screen[(k * screen_w + j) * 4 + 3] = frameBuffer[x + y * 64] * 0xFF; // opacity
                 }
             }
         }
@@ -407,12 +410,36 @@ void chip8::SetScreen(uint8_t *buf, uint32_t w, uint32_t h)
 
 void chip8::MainLoop()
 {
+    uint32_t last_ticks = SDL_GetTicks();
     for (;;)
     {
         if (SDL_AtomicGet(&the_end) != 0)
         {
             break;
         }
+        // Handle timers.
+        uint32_t now = SDL_GetTicks();
+        if (now - last_ticks > 16)
+        {
+            uint32_t diff = now - last_ticks;
+            uint32_t timer_ticks = diff / 16;
+
+            delayTimer = std::max(0, (int)delayTimer - (int)timer_ticks);
+            soundTimer = std::max(0, (int)soundTimer - (int)timer_ticks);
+
+            last_ticks = now - diff % 16;
+        }
+        // Execute Opcode
+        uint16_t opcode;
+        if (pc + 1 >= 4096)
+        {
+            printf("error: pc out of bound (%.4x)\n", pc);
+            return;
+        }
+
+        opcode = memory[pc] << 8 | memory[pc + 1];
+        pc += 2;
+        executeOpcode(opcode);
         SDL_Delay(1);
     }
 }
@@ -422,6 +449,54 @@ int VMThread(void *vm_obj)
     chip8 *vm = (chip8 *)vm_obj;
     vm->MainLoop();
     return 0;
+}
+
+int TranslateCodeToIndex(SDL_Keycode key)
+{
+    switch (key)
+    {
+    case SDLK_1:
+        return 1;
+    case SDLK_2:
+        return 2;
+    case SDLK_3:
+        return 3;
+    case SDLK_4:
+        return 12;
+    case SDLK_q:
+        return 4;
+    case SDLK_w:
+        return 5;
+    case SDLK_e:
+        return 6;
+    case SDLK_r:
+        return 13;
+    case SDLK_a:
+        return 7;
+    case SDLK_s:
+        return 8;
+    case SDLK_d:
+        return 9;
+    case SDLK_f:
+        return 14;
+    case SDLK_z:
+        return 10;
+    case SDLK_x:
+        return 0;
+    case SDLK_c:
+        return 11;
+    case SDLK_v:
+        return 15;
+    case SDLK_DOWN:
+        return 8;
+    case SDLK_UP:
+        return 2;
+    case SDLK_LEFT:
+        return 4;
+    case SDLK_RIGHT:
+        return 6;
+    }
+    return -1;
 }
 
 int main(int argc, char **argv)
@@ -463,9 +538,6 @@ int main(int argc, char **argv)
     SDL_Thread *th = SDL_CreateThread(VMThread, "vm thread", vm.get());
     vm->SetScreen((uint8_t *)surface->pixels, surface->w, surface->h);
 
-    // uint8_t *px = (uint8_t *)surface->pixels;
-    // px[256 * surface->pitch + 512 * 4] = 0xff;
-
     SDL_Event e;
     bool the_end = false;
     while (!the_end)
@@ -476,6 +548,36 @@ int main(int argc, char **argv)
             {
                 the_end = true;
                 break;
+            }
+            if (e.type == SDL_KEYDOWN || e.type == SDL_KEYUP)
+            {
+                int idx = TranslateCodeToIndex(e.key.keysym.sym);
+                if (idx != -1)
+                {
+                    vm->key[idx] = e.key.state == SDL_PRESSED;
+
+                    if (e.key.state == SDL_PRESSED)
+                    {
+                        vm->last_key = idx;
+                    }
+                    else
+                    {
+                        bool all_keys_are_released = true;
+                        for (int i = 0; i < 16; i++)
+                        {
+                            if (vm->key[i])
+                            {
+                                all_keys_are_released = false;
+                                break;
+                            }
+                        }
+
+                        if (all_keys_are_released)
+                        {
+                            vm->last_key = -1;
+                        }
+                    }
+                }
             }
         }
         SDL_UpdateWindowSurface(win);
