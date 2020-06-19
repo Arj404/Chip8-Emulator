@@ -273,11 +273,11 @@ void chip8::executeOpcode(uint16_t opcode)
             uint8_t px = memory[I + j];
             for (int k = 0; k < 8; k++)
             {
-                if (((px >> (7-k)) & 1) && (frameBuffer[(v[ArgX(opcode)] % 64) + k + ((v[ArgY(opcode)] % 32) + j) * 64]))
+                if (((px >> (7 - k)) & 1) && (frameBuffer[(v[ArgX(opcode)] % 64) + k + ((v[ArgY(opcode)] % 32) + j) * 64]))
                 {
                     v[0xF] = 1;
                 }
-                frameBuffer[(v[ArgX(opcode)] % 64) + k + ((v[ArgY(opcode)] % 32) + j) * 64] ^= (px >> (7-k)) & 1;
+                frameBuffer[(v[ArgX(opcode)] % 64) + k + ((v[ArgY(opcode)] % 32) + j) * 64] ^= (px >> (7 - k)) & 1;
             }
         }
         redrawScreen();
@@ -440,7 +440,7 @@ void chip8::MainLoop()
         opcode = memory[pc] << 8 | memory[pc + 1];
         pc += 2;
         executeOpcode(opcode);
-        SDL_Delay(1);
+        SDL_Delay(1); // comment to run at full speed
     }
 }
 
